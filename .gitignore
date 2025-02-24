@@ -1,0 +1,2 @@
+# 忽略 uploads 目录中的所有文件
+uploads/*
