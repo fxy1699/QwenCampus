@@ -49,67 +49,89 @@ def call_workflow_with_retry(image_url, max_retries=3, delay=2):
 @app.route('/upload', methods=['POST', 'GET'])
 def upload_file():
     if request.method == 'GET':
-        # 获取 uploads 目录下的所有文件
         files = []
         for filename in os.listdir(UPLOAD_FOLDER):
             file_url = f"/uploads/{filename}"
             files.append(file_url)
-        return jsonify({
-            'files': files
-        })
+        return jsonify({'files': files})
     
-    # POST 方法处理
+    # 1. 检查文件是否存在
     if 'images' not in request.files:
-        return jsonify({'error': 'No file part'}), 400
+        return jsonify({
+            'status': 'error',
+            'step': 'file_check',
+            'message': '未找到上传的文件'
+        }), 400
     
     files = request.files.getlist('images')
-    uploaded_files = []
-    analysis_results = []
+    results = []
     
     for file in files:
-        if file and allowed_file(file.filename):
-            # 保存到本地临时文件
+        result = {
+            'original_filename': file.filename,
+            'status': 'processing'
+        }
+        
+        # 2. 验证文件类型
+        if not (file and allowed_file(file.filename)):
+            result.update({
+                'status': 'error',
+                'step': 'file_validation',
+                'message': '不支持的文件类型'
+            })
+            results.append(result)
+            continue
+        
+        try:
+            # 3. 保存到本地
             filename = secure_filename(file.filename)
             unique_filename = f"{str(uuid.uuid4())}_{filename}"
             file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+            file.save(file_path)
             
+            result['local_url'] = f"/uploads/{unique_filename}"
+            
+            # 4. 上传到图床
             try:
-                file.save(file_path)
-                
-                # 上传到 Lsky 图床
                 lsky_result = lsky.lsky_upload_images(file_path, filename)
-                image_url = lsky_result['url']
+                result['lsky_url'] = lsky_result['url']
                 
-                # 调用 Coze 进行图片识别
+                # 5. 调用图像识别
                 try:
-                    analysis = call_workflow_with_retry(image_url)
-                    analysis_results.append({
-                        'image_url': image_url,
+                    analysis = call_workflow_with_retry(lsky_result['url'])
+                    result.update({
+                        'status': 'success',
                         'analysis': analysis
                     })
                 except Exception as e:
-                    analysis_results.append({
-                        'image_url': image_url,
-                        'analysis_error': str(e)
+                    result.update({
+                        'status': 'error',
+                        'step': 'image_analysis',
+                        'message': f'图像识别失败: {str(e)}'
                     })
-                
-                uploaded_files.append({
-                    'local_url': f"/uploads/{unique_filename}",
-                    'lsky_url': image_url
-                })
-                
             except Exception as e:
-                return jsonify({'error': str(e)}), 500
-            
-            # 可选：删除本地临时文件
-            # os.remove(file_path)
+                result.update({
+                    'status': 'error',
+                    'step': 'lsky_upload',
+                    'message': f'图床上传失败: {str(e)}'
+                })
+        except Exception as e:
+            result.update({
+                'status': 'error',
+                'step': 'local_save',
+                'message': f'本地保存失败: {str(e)}'
+            })
+        
+        results.append(result)
+    
+    # 统计处理结果
+    success_count = sum(1 for r in results if r['status'] == 'success')
+    error_count = len(results) - success_count
     
     return jsonify({
-        'message': 'Files uploaded successfully',
-        'files': uploaded_files,
-        'analysis': analysis_results
+        'message': f'处理完成: {success_count} 成功, {error_count} 失败',
+        'results': results
     })
-
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.json

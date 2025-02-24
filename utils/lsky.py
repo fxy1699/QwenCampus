@@ -119,7 +119,7 @@ class Lsky:
         }
         response = requests.post(url, data=multipart_encoder, headers=headers)
         json_response = json.loads(response.text)
-        img_url = json_response["data"]["links"]["url"]
+        img_url = json_response["data"]["links"]["thumbnail_url"]
         key = json_response["data"]["key"]
         name = json_response["data"]["name"]
         origin_name = json_response["data"]["origin_name"]
