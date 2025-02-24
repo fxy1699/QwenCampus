@@ -1,2 +1,3 @@
 # 忽略 uploads 目录中的所有文件
 uploads/*
+utils/__pycache__/lsky.cpython-313.pyc

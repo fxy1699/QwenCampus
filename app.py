@@ -3,7 +3,9 @@ from flask_cors import CORS
 import os
 from werkzeug.utils import secure_filename
 import uuid
-from cozepy import Coze, TokenAuth, COZE_CN_BASE_URL
+from utils.lsky import Lsky
+import time
+from cozepy import Coze, TokenAuth, COZE_CN_BASE_URL, CozeAPIError
 
 app = Flask(__name__)
 CORS(app)  # 启用跨域支持
@@ -21,9 +23,28 @@ def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 # Coze配置
+# 初始化 Lsky 和 Coze
+lsky = Lsky()
 COZE_API_TOKEN = 'pat_lU9WPsqEBNhJYPtl6j9QEnoi3E8D44x6BUkhP4BStHHvSE7o13U85JeyHKPk5KOL'
 WORKFLOW_ID = '7474835190277128231'
 coze = Coze(auth=TokenAuth(token=COZE_API_TOKEN), base_url=COZE_CN_BASE_URL)
+
+def call_workflow_with_retry(image_url, max_retries=3, delay=2):
+    for attempt in range(max_retries):
+        try:
+            workflow = coze.workflows.runs.create(
+                workflow_id=WORKFLOW_ID,
+                parameters={
+                    "input": image_url
+                }
+            )
+            return workflow.data
+        except CozeAPIError as e:
+            if attempt < max_retries - 1:
+                time.sleep(delay)
+                continue
+            raise
+    return None
 
 @app.route('/upload', methods=['POST', 'GET'])
 def upload_file():
@@ -47,39 +68,45 @@ def upload_file():
     
     for file in files:
         if file and allowed_file(file.filename):
+            # 保存到本地临时文件
             filename = secure_filename(file.filename)
             unique_filename = f"{str(uuid.uuid4())}_{filename}"
             file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
             
             try:
                 file.save(file_path)
-                file_url = f"/uploads/{unique_filename}"
-                uploaded_files.append(file_url)
                 
-                # 调用 Coze 工作流进行图片识别
+                # 上传到 Lsky 图床
+                lsky_result = lsky.lsky_upload_images(file_path, filename)
+                image_url = lsky_result['url']
+                
+                # 调用 Coze 进行图片识别
                 try:
-                    workflow = coze.workflows.runs.create(
-                        workflow_id=WORKFLOW_ID,
-                            parameters={
-                                "input": "https://p26-bot-workflow-sign.byteimg.com/tos-cn-i-mdko3gqilj/9de4fc56ecec45d5b93ddf121167819d.png~tplv-mdko3gqilj-image.image?rk3s=81d4c505&x-expires=1771483556&x-signature=dy6VVgASagpzhy32C1ECcHnIwiE%3D&x-wf-file_name=model-icon.png"
-                            }
-                    )
+                    analysis = call_workflow_with_retry(image_url)
                     analysis_results.append({
-                        'file_url': file_url,
-                        'analysis': workflow.data
+                        'image_url': image_url,
+                        'analysis': analysis
                     })
                 except Exception as e:
                     analysis_results.append({
-                        'file_url': file_url,
+                        'image_url': image_url,
                         'analysis_error': str(e)
                     })
-                    
+                
+                uploaded_files.append({
+                    'local_url': f"/uploads/{unique_filename}",
+                    'lsky_url': image_url
+                })
+                
             except Exception as e:
                 return jsonify({'error': str(e)}), 500
+            
+            # 可选：删除本地临时文件
+            # os.remove(file_path)
     
     return jsonify({
         'message': 'Files uploaded successfully',
-        'urls': uploaded_files,
+        'files': uploaded_files,
         'analysis': analysis_results
     })
 
