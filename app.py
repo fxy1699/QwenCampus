@@ -3,6 +3,7 @@ from flask_cors import CORS
 import os
 from werkzeug.utils import secure_filename
 import uuid
+from cozepy import Coze, TokenAuth, COZE_CN_BASE_URL
 
 app = Flask(__name__)
 CORS(app)  # 启用跨域支持
@@ -18,6 +19,11 @@ app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
+
+# Coze配置
+COZE_API_TOKEN = 'pat_lU9WPsqEBNhJYPtl6j9QEnoi3E8D44x6BUkhP4BStHHvSE7o13U85JeyHKPk5KOL'
+WORKFLOW_ID = '7474835190277128231'
+coze = Coze(auth=TokenAuth(token=COZE_API_TOKEN), base_url=COZE_CN_BASE_URL)
 
 @app.route('/upload', methods=['POST', 'GET'])
 def upload_file():
@@ -37,26 +43,44 @@ def upload_file():
     
     files = request.files.getlist('images')
     uploaded_files = []
+    analysis_results = []
     
     for file in files:
         if file and allowed_file(file.filename):
-            # 生成安全的文件名
             filename = secure_filename(file.filename)
-            # 添加唯一标识符防止文件名冲突
             unique_filename = f"{str(uuid.uuid4())}_{filename}"
             file_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
             
             try:
                 file.save(file_path)
-                # 这里返回相对路径，实际使用时需要配置正确的域名
                 file_url = f"/uploads/{unique_filename}"
                 uploaded_files.append(file_url)
+                
+                # 调用 Coze 工作流进行图片识别
+                try:
+                    workflow = coze.workflows.runs.create(
+                        workflow_id=WORKFLOW_ID,
+                            parameters={
+                                "input": "https://p26-bot-workflow-sign.byteimg.com/tos-cn-i-mdko3gqilj/9de4fc56ecec45d5b93ddf121167819d.png~tplv-mdko3gqilj-image.image?rk3s=81d4c505&x-expires=1771483556&x-signature=dy6VVgASagpzhy32C1ECcHnIwiE%3D&x-wf-file_name=model-icon.png"
+                            }
+                    )
+                    analysis_results.append({
+                        'file_url': file_url,
+                        'analysis': workflow.data
+                    })
+                except Exception as e:
+                    analysis_results.append({
+                        'file_url': file_url,
+                        'analysis_error': str(e)
+                    })
+                    
             except Exception as e:
                 return jsonify({'error': str(e)}), 500
     
     return jsonify({
         'message': 'Files uploaded successfully',
-        'urls': uploaded_files
+        'urls': uploaded_files,
+        'analysis': analysis_results
     })
 
 @app.route('/chat', methods=['POST'])
