@@ -38,7 +38,7 @@ def call_workflow_with_retry(image_url, max_retries=3, delay=2):
                     "input": image_url
                 }
             )
-            return workflow.data
+            return workflow.data.get('output','')
         except CozeAPIError as e:
             if attempt < max_retries - 1:
                 time.sleep(delay)
@@ -132,6 +132,7 @@ def upload_file():
         'message': f'处理完成: {success_count} 成功, {error_count} 失败',
         'results': results
     })
+
 @app.route('/chat', methods=['POST'])
 def chat():
     data = request.json
